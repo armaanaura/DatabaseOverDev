@@ -36,25 +36,70 @@
 // |  Row 0 Data @ 8050   |
 // +----------------------+
 
-// STRUCTURE FILE HEADER : For phase 1, we will create 3 properties in file header - page number, page type, next page pointer (just like LL)
+// STRUCTURE FILE HEADER : For phase 1, we will create 3 properties in file header - page number, page type
 // STRUCTURE PAGE NUMBER : Each page will have a 32 bit integer, means first 4 bytes of the page. Lets say we have so many pages in db that its number goes out of range of integer, then what? ANSWER: ~4,294,967,295 * 16KB = ~68 TB of raw page space. So unless your DB crosses 68 TB, you're generally safe with uint32. If we observe first bytes of the page if page number is 1, it will be " 01 00 00 00 ", why so, it should be " 00 00 00 01", right? Answer lies in the concept of LittleEndian and BigEndian, Little Endian Means: The least significant byte (not bit) is stored first — not the individual bits themselves. So if you're storing a 32-bit integer, which is 4 bytes, Little Endian means: The byte that holds the least significant part of the number comes first. The bytes are reversed, not the bits inside each byte. It is not 10 00 00 00 because bytes are reversed not bits.
-
+// STRUCTURE OF PAGE TYPE : Page type is a single byte, so it can take values from 0 to 255. We will use 3 types of pages - Meta Page, Table Page, Overflow Page. We will use 0 for Meta Page, 1 for Table Page and 2 for Overflow Page. So the first byte of the page will be 0,1 or 2 depending on the type of page.
 package utils
+
 import (
-	"strings"
-	"os"
 	"encoding/binary"
 	"fmt"
+	"os"
 )
 
-func CreatePage(Address string, PageSize int) (error){
-	file, err := os.Open(Address)
+func CreatePage(DatabaseAddress string, PageNumber int, PageType string, DesiredPageSize ...int) error {
+	// If no page size is provided, default to 16KB
+	pageSize := 16384
+	if len(DesiredPageSize) > 0 {
+		pageSize = DesiredPageSize[0]
+	}
+
+	var pageTypeInt int
+	switch PageType {
+	case "Meta Page":
+		pageTypeInt = 0
+	case "Table Page":
+		pageTypeInt = 1
+	case "Overflow Page":
+		pageTypeInt = 2
+	default:
+		return fmt.Errorf("invalid page type: %s", PageType)
+	}
+
+	database, err := os.OpenFile(DatabaseAddress, os.O_RDWR, 0644)
 	if err != nil {
-		fmt.Println("Error while opening the file", err)
+		fmt.Println("Error while accessing the database", err)
 		return err
 	}
+	defer database.Close()
 	// created a fixed size storage slice (page)
-	page := make([] byte, PageSize)
+	page := make([]byte, pageSize)
+	// Set the page number in the first 4 bytes of the page (for page number )
+	binary.LittleEndian.PutUint32(page[0:4], uint32(PageNumber))
+	// Set the page type in next 1 byte (for page type)
+	page[4] = byte(pageTypeInt)
 
-	
+	databaseInfo, err := database.Stat()
+	if err != nil {
+		fmt.Println("Error getting file info:", err)
+		return err
+	}
+	databaseSize := databaseInfo.Size()
+	toAddPageOn := int64(pageSize) * int64(PageNumber)
+	if toAddPageOn != databaseSize {
+		fmt.Println("Error while creating a page. Page number is not in sequence")
+		return fmt.Errorf("page number is not in sequence")
+	}
+
+	_, err = database.Seek(toAddPageOn, 0)
+	if err != nil {
+		fmt.Println("Failed to seek to position:", err)
+		return err
+	}
+	_, err = database.Write(page)
+	if err != nil {
+		fmt.Println("Error while writing the page", err)
+		return err
+	}
+	return nil
 }
